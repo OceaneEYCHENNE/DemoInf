@@ -1,0 +1,163 @@
+// Build a biogeographical model using 
+// a homogeneous spatial map
+// a dispersion following a Normal distribution 
+// a population with a life cycle miming Diplodus sargus life cycle
+// with a maximum fertility rate of 500
+
+initialize() {
+	initializeSLiMModelType("nonWF"); // non Wrigth Fisher
+	initializeSLiMOptions(dimensionality="xy"); // 2D model 
+	initializeTreeSeq();	// record the true tree-sequence 
+	initializeSex("A"); // sexual reproduction
+	
+	initializeMutationRate(0.0); // no mutations simulated 
+	initializeMutationType("m1", 0.5, "f", 0.0);
+	initializeGenomicElementType("g1", m1, 1.0);
+	initializeGenomicElement(g1, 0, 1e8); // length of simulated chrosmosome 
+	initializeRecombinationRate(1e-8); // recombination rate per base 
+	
+	defineConstant("W", 100.0); // spatial map width 
+	//defineConstant("K", 1.0);	// local carrying capacity
+	//defineConstant("S_compet", 1.0); // spatial competition width 
+	//defineConstant("S_mate", 1.0); // spatial mate choice width 
+	//defineConstant("S_disp", 1.0); // dispersal width 
+	defineConstant("MAXt", 40000); // number of gens to run to attend the expected time to an MRCA
+	//defineConstant("rep", 1); // number of replicats
+	//defineConstant("spatial", "homo"); // type of spatial map
+	//defineConstant("model", "herm_Dsarg_500");  // type of simulations
+	setSeed(rep); // set seed for repeatability
+	
+	// spatial competition
+	initializeInteractionType(1, "xy", reciprocal=T, maxDistance=3*S_compet); // only individuals within distance 3*sigma  
+	i1.setInteractionFunction("n", 1.0/(2*PI*S_compet^2), S_compet); // convert into interaction strength using a Gaussian
+	
+	// spatial mate choice
+	initializeInteractionType(2, "xy", reciprocal=T, maxDistance=3*S_mate); // only individuals within distance 3*sigma
+	i2.setInteractionFunction("n", 1.0/(2*PI*S_mate^2), S_mate); // convert into interaction strength using a Gaussian
+	
+	// mortality probabilities per age classes 
+	defineConstant("L", c(6.932869998765808228e-01,
+		5.089050212132554263e-01, 4.081990618815852789e-01,
+		3.487750077959576034e-01, 3.110661725357851681e-01,
+		2.858159388527824474e-01, 2.682368732268075595e-01,
+		2.556452822954099480e-01, 2.464342785660523782e-01,
+		2.395892410138596995e-01, 2.344415149585260538e-01,
+		2.305349751602733255e-01, 2.275496947794926061e-01,
+		1.000000000000000000e+00));
+	
+	// fecundity per age classes 
+	defineConstant("Fec", c(0.000000000000000000e+00, 0.000000000000000000e+00, 1.623552599878564422e+02, 2.234785003027978121e+02, 2.793724420154283052e+02, 3.282388239539880033e+02, 3.697062251409388409e+02, 4.041740886091658354e+02, 4.324024140712399458e+02, 4.552712360683352699e+02, 4.736491832101943373e+02, 4.883286750488373968e+02, 5.000000000000000000e+02, 5.000000000000000000e+02));
+	
+	// age at sexual maturity 
+	defineConstant("AgeMat", 2);
+}
+
+// mate choice 
+reproduction(NULL, "F"){
+	// no reproduction for no mature individuals
+	if (individual.age < AgeMat)
+		return;
+	
+	neighbor_density = i1.totalOfNeighborStrengths(individual) ; // sum of interaction strengths
+	
+	num_offspring = rpois(1, Fec[individual.age] / (1 + neighbor_density / K));
+	if (num_offspring == 0)
+		return;
+	
+	for (i in seqLen(num_offspring)) {
+		mate = i2.drawByStrength(individual, 1); // choose our nearest neighbor as a mate, within the max distance
+		if (size(mate) > 0) { // if there is a mate (possible none within interacting distance, in which case there no offspring) 
+			if (mate.sex == "M" & mate.age >= AgeMat) {
+				offspring = p1.addCrossed(individual, mate); // make offspring by sexual reproduction 
+				offspring.setValue("sex", "M"); // set sex of offspring as male
+				pos = individual.spatialPosition + rnorm(2, 0, S_disp); // set position of offspring as random normal in both directions 
+				
+				// stock parents and offspring IDs
+				p1Tag = individual.tag;
+				p2Tag = mate.tag;
+				offspringTag = sim.tag;
+				sim.tag = sim.tag + 1;
+				
+				// reprising boundary
+				if (p1.spatialMapValue("MAP", pos) != 0.0 & p1.pointInBounds(pos)){
+					offspring.setSpatialPosition(pos);}
+				else {}
+				
+				offspring.tag = offspringTag;
+			}
+		}
+	}
+}
+
+
+// initiate population 
+1 early() {
+	sim.addSubpop("p1", asInteger(round(K*W*W))); // set population size at carrying capacity
+	
+	p1.setSpatialBounds(c(0.0, 0.0, W, W));
+	
+	// laod the black and white map file generated with the Marmap script Make_Species_Area.R
+	mapImage = Image("/mnt/DATA1/MAP/map_100x100_grayscale.png");
+	p1.defineSpatialMap("MAP", "xy", mapImage.floatK,
+		valueRange=c(0.0, 1.0), colors=c("#CCCCCC","#0000CC"));
+	
+	// start with uniform distribution across range
+	p1.individuals.setSpatialPosition(p1.pointUniform(asInteger(round(K*W*W))));
+	// start with uniform distribution across age
+	p1.individuals.age = rdunif(p1.individualCount, 0, size(L)-1);
+	
+	// protogeneous hermaphrodism 
+	for (ind in p1.individuals) {
+   	if (ind.age < 4) { 
+   		ind.setValue("sex", "M");
+   	} else {
+   		ind.setValue("sex", "F");} 
+   }
+	
+	// attribute uniques IDs to individuals
+	p1.individuals.tag = seqLen(p1.individualCount);
+	sim.tag = p1.individualCount + 1;
+}
+
+// survival probabilities 
+early() {
+	inds = p1.individuals;
+	ages = inds.age;
+	
+	// truncate at maximal ages
+	maxAgeIdx = size(L) -1;
+	ages[ages > maxAgeIdx] = maxAgeIdx;
+	
+	// calculate individual survival 
+	mortality = L[ages]; // recover mortality for each ages
+	survival = 1 - mortality ;
+	inds.fitnessScaling = survival;
+}
+
+
+1: late() {
+	for (ind in p1.individuals) {
+		if (ind.sex == "M" & ind.age >= 3) {	
+			ind.setValue("sex", "F");
+		}
+	}
+}
+
+late() {
+	// evaluate mate choice and competition in preparation for reproduction
+	i1.evaluate(p1); // competition
+	i2.evaluate(p1); // look for mate
+}
+
+
+late() {
+	// Memorisation of individuals for tree sequence
+	sim.treeSeqRememberIndividuals(p1.individuals, permanent=F);
+}
+
+(MAXt) late() {
+	sim.simulationFinished();
+	
+	// save the tree sequence with a special name
+	sim.treeSeqOutput("/mnt/DATA1/TS/" + "forw_" + spatial + "_m" + S_disp + "_N" + K + "_" + model + "_rep" + rep + ".trees");
+}

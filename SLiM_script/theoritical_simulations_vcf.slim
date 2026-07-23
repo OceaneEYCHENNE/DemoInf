@@ -1,0 +1,140 @@
+// Build a biogeographical model using 
+// a homogeneous spatial map
+// a dispersion following a Normal distribution 
+// a population with no particular life cycle
+// and sort a vcf file 
+
+initialize() {
+	initializeSLiMModelType("nonWF"); // non Wrigth Fisher
+	initializeSLiMOptions(dimensionality="xy"); // 2D model 
+	
+	initializeMutationRate(1e-8); // 
+	initializeMutationType("m1", 0.5, "f", 0.0);
+	initializeGenomicElementType("g1", m1, 1.0);
+	initializeGenomicElement(g1, 0, 1e8); // length of simulated chrosmosome 
+	initializeRecombinationRate(1e-8); // recombination rate per base 
+	
+	defineConstant("W", 100.0); // spatial map width 
+	defineConstant("K", 1.0);	// local carrying capacity
+	defineConstant("S_compet", 1.0); // spatial competition width 
+	defineConstant("S_mate", 1.0); // spatial mate choice width 
+	defineConstant("S_disp", 1.0); // dispersal width 
+	defineConstant("LAMBDA", 2.0); // mean number of offspring
+	defineConstant("MAXt", 40000); // number of gens to run to attend the expected time to an MRCA
+	defineConstant("rep", 10); // number of replicats
+	defineConstant("spatial", "homo"); // type of spatial map
+	defineConstant("model", "theo");  // type of simulations
+	setSeed(rep); // set seed for repeatability
+	
+	// spatial competition
+	initializeInteractionType(1, "xy", reciprocal=T, maxDistance=3*S_compet); // only individuals within distance 3*sigma  
+	i1.setInteractionFunction("n", 1.0/(2*PI*S_compet^2), S_compet); // convert into interaction strength using a Gaussian
+	
+	// spatial mate choice
+	initializeInteractionType(2, "xy", reciprocal=T, maxDistance=3*S_mate); // only individuals within distance 3*sigma
+	i2.setInteractionFunction("n", 1.0/(2*PI*S_mate^2), S_mate); // convert into interaction strength using a Gaussian 
+}
+
+
+// mate choice 
+reproduction(){
+	neighbor_density = i1.totalOfNeighborStrengths(individual) ; // sum of interaction strengths 
+	num_offspring = rpois(1, LAMBDA / (1 + neighbor_density / K)); 
+	for (i in seqLen(num_offspring)) { 
+		mate = i2.drawByStrength(individual, 1); // choose our nearest neighbor as a mate, within the max distance
+			if (size(mate) > 0) { // if there is a mate (possible none within interacting distance, in which case there no offspring)
+			offspring = p1.addCrossed(individual, mate); // make offspring by sexual reproduction 
+			pos = individual.spatialPosition + rnorm(2, 0, S_disp); // set position of offspring as random normal in both directions 
+		
+			// reprising boundary
+			if (p1.spatialMapValue("MAP", pos) != 0.0 & p1.pointInBounds(pos)){
+			offspring.setSpatialPosition(pos); }
+			else {}
+			
+			// assign unique ID to offspring
+			offspring.tag = sim.tag;
+			sim.tag = sim.tag + 1;			
+			
+			if (sim.cycle == MAXt) {
+                line = offspring.tag + "\t" +
+                       individual.tag + "\t" +
+                       mate.tag + "\n";
+                sim.setValue("pedigree_lines",
+                    sim.getValue("pedigree_lines") + line);}
+			}
+			if (sim.cycle == MAXt)
+    catn("Reproduction recorded at generation " + sim.cycle);
+	}
+}
+
+// initiate population 
+1 early() {
+	sim.addSubpop("p1", asInteger(round(K*W*W))); // set population size at carrying capacity
+	
+	p1.setSpatialBounds(c(0.0, 0.0, W, W));
+	
+	// laod the black and white map file generated with the Marmap script Make_Species_Area.R
+	mapImage = Image("/mnt/DATA1/MAP/map_100x100_grayscale.png");
+	p1.defineSpatialMap("MAP", "xy", mapImage.floatK,
+		valueRange=c(0.0, 1.0), colors=c("#CCCCCC","#0000CC"));
+	
+	// start with uniform distribution across range
+	p1.individuals.setSpatialPosition(p1.pointUniform(asInteger(round(K*W*W))));
+	
+	// attribute uniques IDs to individuals
+	p1.individuals.tag = seqLen(p1.individualCount);
+   sim.tag = p1.individualCount + 1;
+}
+
+// survival probabilities 
+early() {
+	inds = p1.individuals; 
+	inds[inds.age > 0].fitnessScaling = 0.0; // remove adults to make discrete generations 
+}
+	
+late() {
+	// evaluate mate choice and competition in preparation for reproduction
+	i1.evaluate(p1); // competition
+	i2.evaluate(p1); // look for mate
+}
+
+(MAXt-1) late() {
+	inds = p1.individuals;
+	parent_pos = "ID\tx\ty\n";
+	for (ind in inds) {
+		pos = ind.spatialPosition; 
+		parent_pos = parent_pos + ind.tag + "\t" + pos[0] + "\t" + pos[1] + "\n";
+	}
+	sim.setValue("parent_positions", parent_pos); }
+
+
+(MAXt) late() {
+	inds = p1.individuals;
+
+	// save the idnividuals positions 
+	desc_pos = "ID\tx\ty\n";
+	for (ind in inds) {
+		pos = ind.spatialPosition;
+		desc_pos = desc_pos + ind.tag + "\t" + pos[0] + "\t" + pos[1] + "\n";
+		}
+	writeFile("/mnt/DATA1/VCF/parents_positions_" + spatial + "_m" + S_disp + "_N" + K + "_" + model + "_rep" + rep + ".txt",sim.getValue("parent_positions")); 
+
+	// save the pedigrees
+	writeFile("/mnt/DATA1/VCF/descendants_positions_" + spatial + "_m" + S_disp + "_N" + K + "_" + model + "_rep" + rep + ".txt", desc_pos);
+	writeFile("/mnt/DATA1/VCF/pedigree_lastgen_" + spatial + "_m" + S_disp + "_N" + K + "_" + model + "_rep" + rep + ".txt", sim.getValue("pedigree_lines"));
+	
+	// mapping entre index VCF et tag
+	mapping = "vcf_id\ttag\tx\ty\n";
+	i = 0;
+	for (ind in inds) {
+		pos = ind.spatialPosition;
+		mapping = mapping + (i + 1) + "\t" + ind.tag + "\t" + pos[0] + "\t" + pos[1] + "\n";
+		i = i + 1;}
+	writeFile("/mnt/DATA1/VCF/mapping_" + spatial + "_m" + S_disp + "_N" + K + "_" + model + "_rep" + rep + ".txt", mapping);
+	
+	
+	// save the vcf with a special name
+	inds.haplosomes.outputHaplosomesToVCF(filePath="/mnt/DATA1/VCF/" + "forw_" + spatial + "_m" + S_disp + "_N" + K + "_" + model + "_rep" + rep + ".vcf");
+
+	sim.simulationFinished();
+}

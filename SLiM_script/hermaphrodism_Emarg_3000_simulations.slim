@@ -1,0 +1,163 @@
+// Build a biogeographical model using 
+// a homogeneous spatial map
+// a dispersion following a Normal distribution 
+// a population with a life cycle miming Epinephelus marginatus life cycle
+// with a maximum fertility rate of 3000
+
+initialize() {
+	initializeSLiMModelType("nonWF"); // non Wrigth Fisher
+	initializeSLiMOptions(dimensionality="xy"); // 2D model 
+	initializeTreeSeq();	// record the true tree-sequence 
+	initializeSex("A"); // sexual reproduction
+	
+	initializeMutationRate(0.0); // no mutations simulated 
+	initializeMutationType("m1", 0.5, "f", 0.0);
+	initializeGenomicElementType("g1", m1, 1.0);
+	initializeGenomicElement(g1, 0, 1e8); // length of simulated chrosmosome 
+	initializeRecombinationRate(1e-8); // recombination rate per base 
+	
+	defineConstant("W", 100.0); // spatial map width 
+	//defineConstant("K", 1.0);	// local carrying capacity
+	//defineConstant("S_compet", 1.0); // spatial competition width 
+	//defineConstant("S_mate", 1.0); // spatial mate choice width 
+	//defineConstant("S_disp", 1.0); // dispersal width 
+	defineConstant("MAXt", 40000); // number of gens to run to attend the expected time to an MRCA
+	//defineConstant("rep", 4); // number of replicats
+	//defineConstant("spatial", "homo"); // type of spatial map
+	//defineConstant("model", "herm_Emarg_2500");  // type of simulations
+	setSeed(rep); // set seed for repeatability
+	
+	// spatial competition
+	initializeInteractionType(1, "xy", reciprocal=T, maxDistance=3*S_compet); // only individuals within distance 3*sigma  
+	i1.setInteractionFunction("n", 1.0/(2*PI*S_compet^2), S_compet); // convert into interaction strength using a Gaussian
+	
+	// spatial mate choice
+	initializeInteractionType(2, "xy", reciprocal=T, maxDistance=3*S_mate); // only individuals within distance 3*sigma
+	i2.setInteractionFunction("n", 1.0/(2*PI*S_mate^2), S_mate); // convert into interaction strength using a Gaussian
+	
+	// mortality probabilities per age classes 
+	defineConstant("L", c(8.038495475684015457e-01, 5.892836955191991244e-01, 4.490234587946172473e-01, 3.587244292486027053e-01, 2.979024416185563906e-01, 2.549877192887075594e-01, 2.234902770135274164e-01, 1.996125329772933110e-01, 1.810250065615872650e-01, 1.662355703066520363e-01, 1.542515491454415910e-01, 1.443905207520463918e-01, 1.361698307237978467e-01, 1.292395717214008810e-01, 1.233405255365576103e-01, 1.182769631697969670e-01, 1.138985764970407155e-01, 1.100881857103505057e-01, 1.067531954015357165e-01, 1.038195407585680297e-01, 1.012273229165812083e-01, 9.892761212454870279e-02, 9.688007237881013367e-02, 9.505117309233623857e-02, 9.341282638586667630e-02, 9.194133710308804996e-02, 9.061658543505102248e-02, 8.942138453766090844e-02, 8.834097119019113098e-02, 1.000000000000000000e+00));
+	
+	// fecundity per age classes 
+	defineConstant("Fec", c(0.000000000000000000e+00, 0.000000000000000000e+00, 0.000000000000000000e+00, 0.000000000000000000e+00, 0.000000000000000000e+00, 1.572929082857775711e+02, 2.314135333618121422e+02, 3.202146890946317512e+02, 4.224685477476928099e+02, 5.365881375521696555e+02, 6.607783873846191227e+02, 7.931577622758836696e+02, 9.318516458658135662e+02, 1.075060584143649976e+03, 1.221107272415781836e+03, 1.368466255597993722e+03, 1.515780036384185223e+03, 1.661864838992010391e+03, 1.805708772281227766e+03, 1.946464640017857164e+03, 2.083439192053882834e+03, 2.216080213481384362e+03, 2.343962513467576173e+03, 2.466773599224021382e+03, 2.584299597885004914e+03, 2.696411813059257383e+03, 2.803054166299459212e+03, 2.904231669886050895e+03, 3.000000000000000000e+03, 3.000000000000000000e+03));
+	
+	// age at sexual maturity 
+	defineConstant("AgeMat", 5);
+	defineConstant("AgeSexChange", 12);
+}
+
+// mate choice 
+reproduction(NULL, "F"){
+	// no reproduction for no mature individuals
+	if (individual.age < AgeMat)
+		return;
+	
+	neighbor_density = i1.totalOfNeighborStrengths(individual) ; // sum of interaction strengths
+	
+	num_offspring = rpois(1, Fec[individual.age] / (1 + neighbor_density / K));
+	if (num_offspring == 0)
+		return;
+	
+	for (i in seqLen(num_offspring)) {
+		mate = i2.drawByStrength(individual, 1); // choose our nearest neighbor as a mate, within the max distance
+		if (size(mate) > 0) { // if there is a mate (possible none within interacting distance, in which case there no offspring) 
+			if (mate.sex == "M" & mate.age >= AgeMat) {
+				offspring = p1.addCrossed(individual, mate); // make offspring by sexual reproduction 
+				offspring.setValue("sex", "F"); // set sex of offspring as female
+				pos = individual.spatialPosition + rnorm(2, 0, S_disp); // set position of offspring as random normal in both directions 
+				
+				// stock parents and offspring IDs
+				p1Tag = individual.tag;
+				p2Tag = mate.tag;
+				offspringTag = sim.tag;
+				sim.tag = sim.tag + 1;
+				
+				// reprising boundary
+				if (p1.spatialMapValue("MAP", pos) != 0.0 & p1.pointInBounds(pos)){
+					offspring.setSpatialPosition(pos);}
+				else {}
+				
+				offspring.tag = offspringTag;
+			}
+		}
+	}
+}
+
+
+// initiate population 
+1 early() {
+	sim.addSubpop("p1", asInteger(round(K*W*W))); // set population size at carrying capacity
+	
+	p1.setSpatialBounds(c(0.0, 0.0, W, W));
+	
+	// laod the black and white map file generated with the Marmap script Make_Species_Area.R
+	mapImage = Image("/mnt/DATA1/MAP/map_100x100_grayscale.png");
+	p1.defineSpatialMap("MAP", "xy", mapImage.floatK,
+		valueRange=c(0.0, 1.0), colors=c("#CCCCCC","#0000CC"));
+	
+	// start with uniform distribution across range
+	p1.individuals.setSpatialPosition(p1.pointUniform(asInteger(round(K*W*W))));
+	// start with uniform distribution across age
+	p1.individuals.age = rdunif(p1.individualCount, 0, size(L)-1);
+	
+	// protogeneous hermaphrodism 
+	for (ind in p1.individuals) {
+   	if (ind.age < AgeSexChange) { 
+   		ind.setValue("sex", "F");
+   	} else {
+   		ind.setValue("sex", "M");} 
+   }
+	
+	// attribute uniques IDs to individuals
+	p1.individuals.tag = seqLen(p1.individualCount);
+	sim.tag = p1.individualCount + 1;
+}
+
+// survival probabilities 
+early() {
+	inds = p1.individuals;
+	ages = inds.age;
+	
+	// truncate at maximal ages
+	maxAgeIdx = size(L) -1;
+	ages[ages > maxAgeIdx] = maxAgeIdx;
+	
+	// calculate individual survival 
+	mortality = L[ages]; // recover mortality for each ages
+	survival = 1 - mortality ;
+	inds.fitnessScaling = survival;
+	
+	// global density dependent regulation 
+	//K_global = 10000; // ou une valeur proche de ton effectif cible
+	//scaling = (K_global / p1.individualCount); // scalaire
+	//inds.fitnessScaling = pmin(inds.fitnessScaling * scaling, rep(1.5, inds.size()));
+}
+
+
+1: late() {
+	for (ind in p1.individuals) {
+		if (ind.sex == "F" & ind.age >= AgeSexChange) {	
+			ind.setValue("sex", "M");
+		}
+	}
+}
+
+
+late() {
+	// evaluate mate choice and competition in preparation for reproduction
+	i1.evaluate(p1); // competition
+	i2.evaluate(p1); // look for mate
+}
+
+
+late() {
+	// Memorisation of individuals for tree sequence
+	sim.treeSeqRememberIndividuals(p1.individuals, permanent=F);
+}
+
+(MAXt) late() {
+	sim.simulationFinished();
+	
+	// save the tree sequence with a special name
+	sim.treeSeqOutput("/mnt/DATA1/TS/" + "forw_" + spatial + "_m" + S_disp + "_N" + K + "_" + model + "_rep" + rep + ".trees");
+}
