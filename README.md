@@ -1,0 +1,1 @@
+Scripts from this repository are associated to the following publication: **Eychenne O.**, Manel, S., & Gagnaire P.-A. (2026). Navigating between global robustness and fine-scale resolution: the potential of demographic inference based on identical-by-descent segments.
